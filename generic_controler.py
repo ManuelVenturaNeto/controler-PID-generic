@@ -18,7 +18,7 @@ class GenericControler():
         self.pv = float(controler_definitions.get("pv", 0.0))
         self.K = int(controler_definitions.get("K", 100))
 
-        self.modo = str(controler_definitions.get("modo", "manual"))
+        self.mode = str(controler_definitions.get("modo", "manual"))
         self.acao = str(controler_definitions.get("acao", "direta"))
 
         self.T = self.ts
@@ -38,14 +38,41 @@ class GenericControler():
         self.vm = 0.0               # saída atual (K)
         self._ticks = 0
 
+        self.anti_reset_windap = int(controler_definitions.get("anti_reset_windap", 1000))
 
 
     def main(self) -> dict:
 
 
         for step in range(self.K):
-            out = self.ctrl()
+
+            change_mode = input("Digite 'm' p/ manual, 'a' p/ automatico ou ENTER p/ manter: ").lower()
+            if change_mode == "m":
+                self.mode = "manual"
+
+            elif change_mode == "a":
+                self.mode = "automatico"
+
+            if self.mode == "automatico":
+                out = self.ctrl()
+
+            elif self.mode == "manual":
+                manual_value = input(f"Step {step:03d} (manual) - digite valor para m(k): ").strip()
+
+                if manual_value.isdigit():
+                    self._m0 = float(manual_value)
+                    self._m1 = float(manual_value)
+
+                    out = self.ctrl()
+            
+            else:
+                print(f"modo: {self.mode} - invalido")    
+
             print(f"{step:03d}: {out}")
+
+            if self.vm > self.anti_reset_windap:
+                break
+
             self.pass_time()
 
         return {"sp": self.sp, "vm": self.vm}
@@ -66,17 +93,18 @@ class GenericControler():
 
         self.a2 = (self.kp * self.Td) / self.T
 
-        self._m = (self.a0 * self._e0) + (self.a1 * self._e1) + (self.a2 * self._e2) + self._m1
+        if self.mode == "automatico":
+            self._m0 = (self.a0 * self._e0) + (self.a1 * self._e1) + (self.a2 * self._e2) + self._m1
 
-        self._m1 = self._m if self.sp < self.vm else -self._m
+        self._m1 = self._m0
 
-        self.vm = self._m
+        self.vm = round(self._m0, 2)
 
         return {
             "sp": self.sp,
             "vm": self.vm,
             "pv": self.pv,
-            "modo": self.modo,
+            "modo": self.mode,
             "acao": self.acao,
             "a0": self.a0,
             "a1": self.a1,
@@ -84,6 +112,8 @@ class GenericControler():
             "e0": self._e0,
             "e1": self._e1,
             "e2": self._e2,
+            "m": round(self._m0, 2),
+            "m1": round(self._m1, 2)
             }
 
 
@@ -102,12 +132,10 @@ class GenericControler():
         """
         Calcula o erro de acordo com a acao aplicada.
         """
-        self._e0 = self.sp - self.pv
-
         if self.acao == "inversa":
-            return -self._e0
+            self._e0 = self.pv - self.sp
 
-        return self._e0
+        return self.sp - self.pv
 
 
 
