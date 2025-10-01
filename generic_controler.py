@@ -23,7 +23,7 @@ class GenericControler():
         self.mode = str(controler_definitions.get("modo", "manual"))
         self.action = str(controler_definitions.get("acao", "direta"))
 
-        self.action_dir = -1 if self.action == "inversa" else 1
+        self.action_dir = -1 if self.action == "direta" else 1
 
         self.T = self.ts
         self.Ti = self._infer_Ti()
@@ -36,6 +36,10 @@ class GenericControler():
         self._e0 = 0.0              # e(k)
         self._e1 = 0.0              # e(k-1)
         self._e2 = 0.0              # e(k-2)
+
+        self._c0 = 0.0              # c(k)
+        self._c1 = 0.0              # c(k-1)
+        self._c2 = 0.0              # c(k-2)
 
         self._m0 = 0.0              # m(k)
         self._m1 = 0.0              # m(k-1)
@@ -61,7 +65,7 @@ class GenericControler():
 
         if self.mode == "automatico":
             delta = (self.a0 * self._e0) + (self.a1 * self._e1) + (self.a2 * self._e2)
-            self.action_dir = -1 if self.action == "inversa" else 1
+            self.action_dir = -1 if self.action == "direta" else 1
             self._m0 = self._m1 + self.action_dir * delta
 
         lim = abs(self.anti_reset_windap)

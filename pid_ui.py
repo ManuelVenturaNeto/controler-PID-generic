@@ -15,7 +15,7 @@ DEFAULTS = {
     "sp": 50.0,                   # setpoint
     "ts": 1,                      # período de amostragem (s)
     "pv": 0,
-    "anti_reset_windap": 800
+    "anti_reset_windap": 1000
 }
 
 
