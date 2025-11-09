@@ -8,8 +8,6 @@ class GenericControler():
     Controler class (PID incremental / forma de velocidade) + modelo discreto (Z-transform).
     """
 
-    #   K = 0 a 100
-
     def __init__(self, controler_definitions: dict):
 
         self.kp = float(controler_definitions.get("kp", 0.0))
@@ -61,6 +59,16 @@ class GenericControler():
         self.a_n = 0.0
         self.b_1 = 0.0
 
+        # Parâmetros de distúrbio
+        self.disturbio_magnitude = float(controler_definitions.get("disturbio_magnitude", 0.0))
+        self.disturbio_duracao = int(controler_definitions.get("disturbio_duracao", 0))
+        self.disturbio_inicio = int(controler_definitions.get("disturbio_inicio", 0))
+        self._disturbio_ativo = False
+        self._disturbio_contador = 0
+
+        # Estado interno do processo
+        self._process_state = 0.0
+
 
 
     def _update_eta(self):
@@ -76,10 +84,32 @@ class GenericControler():
 
 
 
+    def _aplicar_disturbio(self):
+        """Aplica distúrbio ao sistema se estiver no período configurado"""
+        if self.disturbio_duracao <= 0 or self.disturbio_magnitude == 0:
+            return 0.0
+        
+        # Ativa o distúrbio se atingiu o início
+        if not self._disturbio_ativo and self._ticks >= self.disturbio_inicio:
+            self._disturbio_ativo = True
+            self._disturbio_contador = 0
+        
+        # Aplica o distúrbio enquanto estiver ativo
+        if self._disturbio_ativo:
+            if self._disturbio_contador < self.disturbio_duracao:
+                self._disturbio_contador += 1
+                return self.disturbio_magnitude
+            else:
+                # Desativa o distúrbio após a duração
+                self._disturbio_ativo = False
+        
+        return 0.0
+
+
+
     def ctrl(self) -> dict:
         """
         Executa 1 iteração de controle (PID incremental) e calcula C(k) via modelo discreto.
-        A malha é fechada aqui usando self._c0 como realimentação (pv ← self._c0).
         """
 
         # --- PID incremental ---
@@ -103,30 +133,39 @@ class GenericControler():
         if self._m0 >  lim: self._m0 = float(lim)
         if self._m0 < -lim: self._m0 = -float(lim)
 
+        # Aplica distúrbio na variável manipulada ANTES do cálculo do processo
+        disturbio_atual = self._aplicar_disturbio()
+        m0_com_disturbio = self._m0 + disturbio_atual
+
         self._m1 = self._m0
-        self.vm = round(self._m0, 2)
+        self.vm = round(m0_com_disturbio, 2)  # Agora vm inclui o distúrbio
 
         # --- Z-transform / modelo discreto ---
-        ck = self._c0
         if self.k > 0.0 and self.j > 0.0 and self.T > 0.0:
             self.a_n = self.k * (1.0 - math.exp(-self.T / self.j))
             self.b_1 = math.exp(-self.T / self.j)
 
             # tempo morto discreto eta = 1 + floor(tm/T)
             self._update_eta()
-            self._m_delay_buf.append(self._m1)
-            m_delay = self._m_delay_buf[0]  # m(k-eta)
+            self._m_delay_buf.append(m0_com_disturbio)  # Usa m0 COM distúrbio
+            m_delay = self._m_delay_buf[0]  # m(k-eta) COM distúrbio
 
-            ck = (self.a_n * m_delay) + (self.b_1 * self._c1)
+            # Atualiza o estado do processo
+            self._process_state = (self.a_n * m_delay) + (self.b_1 * self._process_state)
+            ck = self._process_state
         else:
             # fallback simples quando modelo não parametrizado
-            ck = self._m1
+            ck = m0_com_disturbio
 
-        self._c1 = ck
+        # Fechamento da malha - PV é a saída do processo
+        self.pv = ck
+
+        # Atualiza as variáveis de estado para o próximo ciclo
+        self._c1 = self._c0
         self._c0 = ck
 
-        # Fechamento da malha
-        self.pv = float(self._c0)
+        # Incrementa ticks para controle de distúrbio
+        self._ticks += 1
 
         return {
             "sp": self.sp,
@@ -145,6 +184,8 @@ class GenericControler():
             "ck": round(ck, 3),
             "a_n": round(self.a_n, 3),
             "b_1": round(self.b_1, 3),
+            "disturbio_ativo": self._disturbio_ativo,
+            "disturbio_valor": disturbio_atual,
         }
 
 
@@ -154,13 +195,19 @@ class GenericControler():
         self._ticks += 1
         return self._ticks
 
+
+
     def _erro(self) -> float:
         return self.sp - self.pv
+
+
 
     def _infer_Ti(self) -> float:
         if self.ki > 0.0 and self.kp > 0.0:
             return self.kp / self.ki
         return 0.0
+
+
 
     def _infer_Td(self) -> float:
         if self.kp > 0.0 and self.kd > 0.0:

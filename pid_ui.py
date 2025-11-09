@@ -8,17 +8,19 @@ DEFAULTS = {
     "kp": 0.5,
     "ki": 0.5, #0.5 amortecido, #0.1 suport amortecido, #0.7 subamortecido, #0.8< instavel
     "kd": 0.1,
-    "K": 100,                    # limite superior (0..100)
-    "modo": "automatico",        # "automatico" | "manual"
-    "acao": "reversa",           # "direta" | "reversa"
-    "sp": 50.0,                  # setpoint
-    "ts": 1,                     # período de amostragem (s)
+    "K": 1000, # limite superior (0..100)
+    "modo": "automatico", # "automatico" | "manual"
+    "acao": "reversa", # "direta" | "reversa"
+    "sp": 50.0, # setpoint
+    "ts": 0.5, # período de amostragem (s)
     "pv": 0,
     "anti_reset_windap": 1000,
-    # Parâmetros do processo (Z)
     "k": 1.0,
     "j": 3.0,
-    "tm": 2.0
+    "tm": 2.0,
+    "disturbio_magnitude": 30,
+    "disturbio_duracao": 5,
+    "disturbio_inicio": 1
 }
 
 def ui2ctrl_action(v: str) -> str:
@@ -30,8 +32,8 @@ class PIDUI(tk.Tk):
     def __init__(self, defaults=None):
         super().__init__()
         self.title("GenericControler - UI Responsiva")
-        self.geometry("1400x1000")
-        self.minsize(960, 620)
+        self.geometry("1400x1200")  # Aumentado de 1000 para 1200
+        self.minsize(960, 720)  # Aumentado de 620 para 720
 
         self.defaults = dict(DEFAULTS if defaults is None else defaults)
         self.running = False
@@ -80,6 +82,10 @@ class PIDUI(tk.Tk):
         self.var_kproc = tk.DoubleVar(value=self.defaults["k"])
         self.var_j     = tk.DoubleVar(value=self.defaults["j"])
         self.var_tm    = tk.DoubleVar(value=self.defaults["tm"])
+        # Parâmetros de distúrbio
+        self.var_dist_mag = tk.DoubleVar(value=self.defaults["disturbio_magnitude"])
+        self.var_dist_dur = tk.IntVar(value=self.defaults["disturbio_duracao"])
+        self.var_dist_ini = tk.IntVar(value=self.defaults["disturbio_inicio"])
 
         def spin(frame, label, var, inc, fmt="{:.2f}", is_int=False):
             sub = ttk.Frame(frame)
@@ -130,17 +136,23 @@ class PIDUI(tk.Tk):
         ttk.Combobox(row2, textvariable=self.var_acao, values=["direta", "reversa"],
                      width=12, state="readonly").grid(row=0, column=6, padx=(0,8))
 
-        # Parâmetros do processo (Z): k, j, tm
-        spin(row2, "k",  self.var_kproc, 0.1).grid(row=0, column=7, padx=4, pady=2)
-        spin(row2, "j",  self.var_j,     0.1).grid(row=0, column=8, padx=4, pady=2)
-        spin(row2, "tm", self.var_tm,    0.1).grid(row=0, column=9, padx=4, pady=2)
+        # Linha 3: Parâmetros do processo (Z) e distúrbio
+        row3 = ttk.Frame(frm); row3.grid(row=2, column=0, columnspan=5, sticky="ew")
+        spin(row3, "k",  self.var_kproc, 0.1).grid(row=0, column=0, padx=4, pady=2)
+        spin(row3, "j",  self.var_j,     0.1).grid(row=0, column=1, padx=4, pady=2)
+        spin(row3, "tm", self.var_tm,    0.1).grid(row=0, column=2, padx=4, pady=2)
+        
+        # Controles de distúrbio
+        spin(row3, "Dist Mag", self.var_dist_mag, 2).grid(row=0, column=3, padx=4, pady=2)
+        spin(row3, "Dist Dur", self.var_dist_dur, 2, is_int=True).grid(row=0, column=4, padx=4, pady=2)
+        spin(row3, "Dist Ini", self.var_dist_ini, 2, is_int=True).grid(row=0, column=5, padx=4, pady=2)
 
-        # Linha 3: apenas botões principais
-        row3 = ttk.Frame(frm); row3.grid(row=2, column=0, columnspan=5, sticky="ew", pady=(6,0))
-        ttk.Button(row3, text="Iniciar", command=self.start).grid(row=0, column=0, padx=4)
-        self.btn_pause = ttk.Button(row3, text="Pausar", command=self.toggle_pause)
+        # Linha 4: apenas botões principais
+        row4 = ttk.Frame(frm); row4.grid(row=3, column=0, columnspan=5, sticky="ew", pady=(6,0))
+        ttk.Button(row4, text="Iniciar", command=self.start).grid(row=0, column=0, padx=4)
+        self.btn_pause = ttk.Button(row4, text="Pausar", command=self.toggle_pause)
         self.btn_pause.grid(row=0, column=1, padx=4)
-        ttk.Button(row3, text="Reset", command=self.reset).grid(row=0, column=2, padx=4)
+        ttk.Button(row4, text="Reset", command=self.reset).grid(row=0, column=2, padx=4)
 
 
     def _on_modo_change(self, *args):
@@ -224,11 +236,13 @@ class PIDUI(tk.Tk):
 
 
     def _build_plot(self):
-        # Apenas 1 gráfico: ck ocupando toda a área
-        self.fig = Figure(figsize=(5,3), dpi=100)
+        # Dois gráficos: ck e m1
+        self.fig = Figure(figsize=(5, 6), dpi=100)  # Aumentada a altura para acomodar dois gráficos
+        self.fig.subplots_adjust(hspace=0.3)
 
-        self.ax_ck = self.fig.add_subplot(111)
-        self.ax_ck.set_title("Saída do modelo (ck = c(k))")
+        # Gráfico superior - ck
+        self.ax_ck = self.fig.add_subplot(211)
+        self.ax_ck.set_title("Saída do modelo (ck)")
         self.ax_ck.set_xlabel("Passo")
         self.ax_ck.set_ylabel("ck")
         self.line_ck, = self.ax_ck.plot([], [])
@@ -237,11 +251,23 @@ class PIDUI(tk.Tk):
         self.ax_ck.autoscale(enable=True, axis='y')
         self.ax_ck.relim(); self.ax_ck.autoscale_view()
 
+        # Novo gráfico inferior - m1
+        self.ax_m1 = self.fig.add_subplot(212)
+        self.ax_m1.set_title("Variável Manipulada (vm)")
+        self.ax_m1.set_xlabel("Passo")
+        self.ax_m1.set_ylabel("m1")
+        self.line_m1, = self.ax_m1.plot([], [])
+        self.ax_m1.grid(True)
+        self.ax_m1.set_autoscale_on(True)
+        self.ax_m1.autoscale(enable=True, axis='y')
+        self.ax_m1.relim(); self.ax_m1.autoscale_view()
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
 
         self.xdata = []
         self.ydata_ck = []
+        self.ydata_m1 = []  # Nova lista para dados m1
 
 
 
@@ -249,7 +275,7 @@ class PIDUI(tk.Tk):
         frm = ttk.Frame(self, padding=8); frm.grid(row=2, column=0, sticky="nsew")
         self.rowconfigure(2, weight=1); frm.rowconfigure(0, weight=1); frm.columnconfigure(0, weight=1)
 
-        cols = ["step","kp","ki","kd","K","modo","acao","sp","ts","pv","anti_reset_windap","vm","m","e0","e1","e2"]
+        cols = ["step","kp","ki","kd","K","modo","acao","sp","ts","pv","anti_reset_windap","vm","m","e0","e1","e2","disturbio_ativo","disturbio_valor"]
         self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=8)
 
         for c in cols:
@@ -263,8 +289,8 @@ class PIDUI(tk.Tk):
         yscroll.grid(row=0, column=1, sticky="ns")
 
     def _wire_resize(self):
-        self.grid_rowconfigure(1, weight=3)
-        self.grid_rowconfigure(2, weight=2)
+        self.grid_rowconfigure(1, weight=3)  # Gráficos com mais peso
+        self.grid_rowconfigure(2, weight=1)  # Tabela com menos peso
         self.grid_columnconfigure(0, weight=1)
 
     # ---------- Control flow ----------
@@ -318,8 +344,11 @@ class PIDUI(tk.Tk):
         self.step_idx = 0
         self.history.clear()
         self.xdata.clear(); self.ydata_ck.clear()
+        self.ydata_m1.clear()  # Limpar dados m1
         self.line_ck.set_data([], [])
+        self.line_m1.set_data([], [])  # Limpar linha m1
         self.ax_ck.relim(); self.ax_ck.autoscale_view()
+        self.ax_m1.relim(); self.ax_m1.autoscale_view()  # Resetar m1
         self.canvas.draw_idle()
 
         defs = self._current_defs()
@@ -346,7 +375,10 @@ class PIDUI(tk.Tk):
             "anti_reset_windap": int(self.var_anti.get()),
             "k":  float(self.var_kproc.get()),
             "j":  float(self.var_j.get()),
-            "tm": float(self.var_tm.get())
+            "tm": float(self.var_tm.get()),
+            "disturbio_magnitude": float(self.var_dist_mag.get()),
+            "disturbio_duracao": int(self.var_dist_dur.get()),
+            "disturbio_inicio": int(self.var_dist_ini.get())
         }
 
 
@@ -362,6 +394,9 @@ class PIDUI(tk.Tk):
         self.ctrl.k  = d["k"]
         self.ctrl.j  = d["j"]
         self.ctrl.tm = d["tm"]
+        self.ctrl.disturbio_magnitude = d["disturbio_magnitude"]
+        self.ctrl.disturbio_duracao = d["disturbio_duracao"]
+        self.ctrl.disturbio_inicio = d["disturbio_inicio"]
 
     def _tick(self):
         if not self.running:
@@ -387,6 +422,13 @@ class PIDUI(tk.Tk):
 
         self.line_ck.set_data(self.xdata, self.ydata_ck)
         self.ax_ck.relim(); self.ax_ck.autoscale_view()
+
+        # Atualiza a série de m1
+        y_m1 = out["vm"]  # Já está no dicionário de saída
+        self.ydata_m1.append(y_m1)
+        self.line_m1.set_data(self.xdata, self.ydata_m1)
+        self.ax_m1.relim(); self.ax_m1.autoscale_view()
+
         self.canvas.draw_idle()
 
         # Tabela (mantida mínima)
@@ -406,10 +448,12 @@ class PIDUI(tk.Tk):
             "m": out["m"],
             "e0": out["e0"], 
             "e1": out["e1"], 
-            "e2": out["e2"]
+            "e2": out["e2"],
+            "disturbio_ativo": out["disturbio_ativo"],
+            "disturbio_valor": out["disturbio_valor"]
         }
         self.history.append(row)
-        values = [row[c] for c in ["step","kp","ki","kd","K","modo","acao","sp","ts","pv","anti_reset_windap","vm","m","e0","e1","e2"]]
+        values = [row[c] for c in ["step","kp","ki","kd","K","modo","acao","sp","ts","pv","anti_reset_windap","vm","m","e0","e1","e2","disturbio_ativo","disturbio_valor"]]
         self.tree.insert("", "end", values=values)
 
         # Fechamento da malha está dentro do controller (pv <- self._c0).
